@@ -14,14 +14,42 @@
   <header class="top">
     <button class="back" id="back" hidden aria-label="Voltar">←</button>
     <h1>Raquete <span>AI</span></h1>
+    <button class="link" id="logout" hidden>Sair</button>
   </header>
 
   <main>
-    <!-- Início -->
-    <section id="view-home" class="view">
+    <!-- Entrar / criar conta -->
+    <section id="view-auth" class="view" hidden>
       <div class="hero">
         <p class="eyebrow">Seu treinador de tênis com IA</p>
         <h2>Grave um golpe. Receba nota, correções e exercícios.</h2>
+      </div>
+      <div class="card">
+        <div class="tabs">
+          <button class="tab active" data-mode="login">Entrar</button>
+          <button class="tab" data-mode="signup">Criar conta</button>
+        </div>
+        <form id="auth-form" class="form">
+          <label id="name-field" hidden>Nome
+            <input name="name" autocomplete="name" maxlength="60">
+          </label>
+          <label>E-mail
+            <input name="email" type="email" autocomplete="email" required>
+          </label>
+          <label>Senha
+            <input name="password" type="password" autocomplete="current-password" minlength="8" required>
+          </label>
+          <p class="error" id="auth-error" hidden></p>
+          <button class="btn primary big" id="auth-submit">Entrar</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- Início -->
+    <section id="view-home" class="view">
+      <div class="hero">
+        <p class="eyebrow" id="hello">Olá!</p>
+        <h2>Pronto para treinar? Grave um golpe e veja sua nota.</h2>
       </div>
       <div class="card stats" id="stats"></div>
       <button class="btn primary big" data-go="new">+ Nova análise</button>
@@ -86,6 +114,7 @@
     <section id="view-result" class="view" hidden>
       <div id="result"></div>
       <button class="btn primary big" data-go="new">Analisar outro golpe</button>
+      <button class="btn ghost" id="delete-analysis" hidden>Excluir esta análise</button>
     </section>
   </main>
 

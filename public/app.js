@@ -1,27 +1,96 @@
 const STROKE_NAMES = { serve: "Saque", forehand: "Forehand", backhand: "Backhand", volley: "Voleio", smash: "Smash" };
 const FRAME_COUNT = 10;
 const FRAME_WIDTH = 640;
-const STORAGE_KEY = "raquete-ai-history";
+const THUMB_WIDTH = 160;
 
 const $ = (sel) => document.querySelector(sel);
-const state = { stroke: "serve", file: null, view: "home" };
+const state = { stroke: "serve", file: null, view: "home", user: null, history: [], current: null };
 
-// ---------- Histórico (salvo no próprio aparelho) ----------
-function loadHistory() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; } catch { return []; }
+// ---------- Servidor ----------
+async function api(url, options = {}) {
+  const res = await fetch(url, {
+    ...options,
+    headers: options.body ? { "Content-Type": "application/json" } : {},
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && state.user) {
+    state.user = null;
+    show("auth");
+  }
+  if (!res.ok) throw new Error(data.error || "Algo deu errado. Tente novamente.");
+  return data;
 }
-function saveHistory(items) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(items.slice(0, 50))); } catch { /* armazenamento cheio ou bloqueado */ }
+
+async function loadHistory() {
+  state.history = (await api("/api/analyses")).analyses;
 }
 
 // ---------- Navegação ----------
 function show(view) {
   state.view = view;
-  for (const v of ["home", "new", "loading", "result"]) $(`#view-${v}`).hidden = v !== view;
-  $("#back").hidden = view === "home" || view === "loading";
+  for (const v of ["auth", "home", "new", "loading", "result"]) $(`#view-${v}`).hidden = v !== view;
+  $("#back").hidden = ["auth", "home", "loading"].includes(view);
+  $("#logout").hidden = !state.user || view !== "home";
   if (view === "home") renderHome();
   window.scrollTo(0, 0);
 }
+
+// ---------- Entrar / criar conta ----------
+let authMode = "login";
+document.querySelectorAll(".tab").forEach((tab) => {
+  tab.onclick = () => {
+    authMode = tab.dataset.mode;
+    document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t === tab));
+    $("#name-field").hidden = authMode !== "signup";
+    $("#name-field input").required = authMode === "signup";
+    $("#auth-form [name=password]").autocomplete = authMode === "signup" ? "new-password" : "current-password";
+    $("#auth-submit").textContent = authMode === "signup" ? "Criar conta" : "Entrar";
+    $("#auth-error").hidden = true;
+  };
+});
+
+$("#auth-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const form = Object.fromEntries(new FormData(e.target));
+  $("#auth-submit").disabled = true;
+  $("#auth-error").hidden = true;
+  try {
+    const { user } = await api(authMode === "signup" ? "/api/signup" : "/api/login", { method: "POST", body: form });
+    state.user = user;
+    e.target.reset();
+    await loadHistory();
+    $("#delete-analysis").onclick = async () => {
+  const item = state.current;
+  if (!item?.id || !confirm("Excluir esta análise do seu histórico?")) return;
+  await api(`/api/analyses/${item.id}`, { method: "DELETE" });
+  state.history = state.history.filter((h) => h.id !== item.id);
+  show("home");
+};
+
+// ---------- Início do app ----------
+(async () => {
+  try {
+    const status = await api("/api/status");
+    state.user = status.user;
+    if (state.user) await loadHistory();
+  } catch { /* sem conexão: cai na tela de login */ }
+  show(state.user ? "home" : "auth");
+})();
+  } catch (err) {
+    $("#auth-error").textContent = err.message;
+    $("#auth-error").hidden = false;
+  } finally {
+    $("#auth-submit").disabled = false;
+  }
+};
+
+$("#logout").onclick = async () => {
+  await api("/api/logout", { method: "POST" }).catch(() => {});
+  state.user = null;
+  state.history = [];
+  show("auth");
+};
 $("#back").onclick = () => show("home");
 document.querySelectorAll("[data-go]").forEach((b) => (b.onclick = () => show(b.dataset.go)));
 
@@ -34,7 +103,8 @@ function fmtDate(ts) {
 }
 
 function renderHome() {
-  const items = loadHistory();
+  const items = state.history;
+  $("#hello").textContent = `Olá, ${state.user?.name?.split(" ")[0] || "jogador"}!`;
   const scores = items.map((i) => i.result.score);
   const best = scores.length ? Math.max(...scores).toFixed(1) : "–";
   const avg = scores.length ? (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1) : "–";
@@ -52,6 +122,7 @@ function renderHome() {
       <div class="meta"><b>${STROKE_NAMES[item.stroke]}</b><small>${fmtDate(item.date)} · ${item.level}</small></div>
       <span class="pill" style="color:${scoreColor(item.result.score)}">${item.result.score.toFixed(1)}</span>`;
     li.onclick = () => { renderResult(item); show("result"); };
+    li.querySelector("img").hidden = !item.thumb;
     $("#history").appendChild(li);
   }
   renderChart(items.slice().reverse());
@@ -91,7 +162,7 @@ $("#file").onchange = (e) => {
 };
 
 // Extrai quadros espaçados igualmente ao longo do vídeo
-async function extractFrames(file, count) {
+async function extractFrames(file, count) { // devolve { frames, thumb }
   const video = document.createElement("video");
   video.muted = true;
   video.playsInline = true;
@@ -113,6 +184,7 @@ async function extractFrames(file, count) {
   const ctx = canvas.getContext("2d");
 
   const frames = [];
+  let thumb = null;
   for (let i = 0; i < count; i++) {
     const t = (duration * (i + 0.5)) / count;
     await new Promise((ok, fail) => {
@@ -122,9 +194,16 @@ async function extractFrames(file, count) {
     });
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     frames.push(canvas.toDataURL("image/jpeg", 0.75));
+    if (i === Math.floor(count / 2)) {
+      const small = document.createElement("canvas");
+      small.width = THUMB_WIDTH;
+      small.height = Math.round((canvas.height * THUMB_WIDTH) / canvas.width);
+      small.getContext("2d").drawImage(canvas, 0, 0, small.width, small.height);
+      thumb = small.toDataURL("image/jpeg", 0.7);
+    }
   }
   URL.revokeObjectURL(video.src);
-  return frames;
+  return { frames, thumb };
 }
 
 $("#analyze").onclick = async () => {
@@ -136,23 +215,18 @@ $("#analyze").onclick = async () => {
   $("#loading-step").textContent = "Extraindo quadros do vídeo";
 
   try {
-    const frames = await extractFrames(state.file, FRAME_COUNT);
+    const { frames, thumb } = await extractFrames(state.file, FRAME_COUNT);
     $("#frames").innerHTML = frames.map((f) => `<img alt="" src="${f}">`).join("");
     $("#loading-step").textContent = "O treinador de IA está avaliando cada fase do golpe…";
 
-    const res = await fetch("/api/analyze", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ stroke: state.stroke, level, hand, frames }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Erro na análise.");
-
-    const item = { id: Date.now(), date: Date.now(), stroke: state.stroke, level, hand, thumb: frames[Math.floor(frames.length / 2)], result: data };
-    if (data.stroke_detected !== false) saveHistory([item, ...loadHistory()]);
+    const data = await api("/api/analyze", { method: "POST", body: { stroke: state.stroke, level, hand, frames, thumb } });
+    // Golpes não reconhecidos voltam sem id e não entram no histórico
+    const item = data.id ? data : { stroke: state.stroke, level, hand, thumb, result: data.result };
+    if (data.id) state.history.unshift(item);
     renderResult(item);
     show("result");
   } catch (err) {
+    if (!state.user) return;
     show("new");
     const box = document.createElement("p");
     box.className = "error";
@@ -166,6 +240,8 @@ $("#analyze").onclick = async () => {
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
 function renderResult(item) {
+  state.current = item;
+  $("#delete-analysis").hidden = !item.id;
   const r = item.result;
   const C = 2 * Math.PI * 46;
   const pct = Math.max(0, Math.min(10, r.score)) / 10;
@@ -227,4 +303,20 @@ function renderResult(item) {
     </div>` : ""}`}`;
 }
 
-show("home");
+$("#delete-analysis").onclick = async () => {
+  const item = state.current;
+  if (!item?.id || !confirm("Excluir esta análise do seu histórico?")) return;
+  await api(`/api/analyses/${item.id}`, { method: "DELETE" });
+  state.history = state.history.filter((h) => h.id !== item.id);
+  show("home");
+};
+
+// ---------- Início do app ----------
+(async () => {
+  try {
+    const status = await api("/api/status");
+    state.user = status.user;
+    if (state.user) await loadHistory();
+  } catch { /* sem conexão: cai na tela de login */ }
+  show(state.user ? "home" : "auth");
+})();
