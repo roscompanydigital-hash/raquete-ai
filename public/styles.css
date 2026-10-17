@@ -179,3 +179,4 @@ input:focus, select:focus { outline: 2px solid var(--ball); outline-offset: 1px;
 .bd-steps button b { color: var(--ball); margin-right: 2px; }
 .bd-steps button.active { background: var(--ball); color: var(--ball-ink); border-color: var(--ball); }
 .bd-steps button.active b { color: var(--ball-ink); }
+.btn.secondary { background: var(--surface); color: var(--text); border: 1px solid var(--line); }

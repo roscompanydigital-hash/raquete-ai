@@ -8,6 +8,7 @@ const INTRO_MS = 2200;
 const DRAW_MS = 700;
 const HOLD_MS = 4200;
 const MAX_WIDTH = 720;
+const END_MS = 1800;
 
 const ease = (t) => 1 - Math.pow(1 - Math.min(1, Math.max(0, t)), 3);
 
@@ -78,6 +79,51 @@ export class Breakdown {
     this.index = Math.max(0, Math.min(this.checkpoints.length - 1, i));
     await this.#enterHold();
     this.#loop();
+  }
+
+  /** Duração aproximada do breakdown completo, em ms */
+  get totalMs() {
+    const n = this.checkpoints.length;
+    const videoMs = this.video ? (this.video.duration / SLOW_RATE) * 1000 : 0;
+    return INTRO_MS + n * HOLD_MS + videoMs + END_MS;
+  }
+
+  /**
+   * Grava o breakdown inteiro como vídeo (MP4 quando o aparelho suporta, senão WebM).
+   * Toca em tempo real; onProgress recebe de 0 a 1.
+   */
+  async record(onProgress = () => {}) {
+    await this.ready;
+    const type = ["video/mp4;codecs=avc1.42E01E", "video/mp4;codecs=avc1", "video/mp4", "video/webm;codecs=vp9", "video/webm"]
+      .find((t) => window.MediaRecorder?.isTypeSupported(t));
+    if (!type || !this.canvas.captureStream) throw new Error("Este navegador não consegue gerar o vídeo.");
+
+    const stream = this.canvas.captureStream(30);
+    const rec = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 5_000_000 });
+    const chunks = [];
+    rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    const stopped = new Promise((ok) => (rec.onstop = ok));
+
+    this.recording = true;
+    const start = performance.now();
+    rec.start(250);
+    await this.play();
+    await new Promise((ok) => {
+      const tick = setInterval(() => {
+        onProgress(Math.min(0.99, (performance.now() - start) / this.totalMs));
+        if (this.stopped || (this.mode === "end" && performance.now() - this.modeStart > END_MS)) {
+          clearInterval(tick);
+          ok();
+        }
+      }, 200);
+    });
+    rec.stop();
+    await stopped;
+    this.recording = false;
+    stream.getTracks().forEach((t) => t.stop());
+    onProgress(1);
+    if (this.stopped) return null; // usuário saiu da tela no meio
+    return new Blob(chunks, { type: type.split(";")[0] });
   }
 
   stop() {
@@ -152,7 +198,7 @@ export class Breakdown {
     }
 
     this.#draw(now);
-    if (this.mode !== "end" || now - this.modeStart < 600) this.raf = requestAnimationFrame(this.#loop);
+    if (this.mode !== "end" || this.recording || now - this.modeStart < 600) this.raf = requestAnimationFrame(this.#loop);
   };
 
   // ---------- Desenho ----------

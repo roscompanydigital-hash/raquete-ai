@@ -284,6 +284,7 @@ function renderResult(item, videoFile = null) {
         <button class="bd-btn main" id="bd-replay" aria-label="Ver de novo">↻</button>
         <button class="bd-btn" id="bd-next" aria-label="Próximo momento">›</button>
       </div>
+      <button class="btn secondary" id="bd-download">⬇ Baixar vídeo</button>
       <div class="bd-steps" id="bd-steps">
         ${r.phases.map((p, i) => `<button data-i="${i}"><b>${i + 1}</b> ${esc(p.title || p.name)}</button>`).join("")}
       </div>
@@ -397,6 +398,7 @@ async function startBreakdown(item, videoFile) {
   const order = [...checkpoints].sort((a, b) => (a.time ?? a.frame) - (b.time ?? b.frame));
   const current = () => Math.max(0, p.index ?? 0);
   $("#bd-replay").onclick = () => p.play();
+  $("#bd-download").onclick = () => downloadBreakdown(p, item);
   $("#bd-prev").onclick = () => p.goTo(current() - 1);
   $("#bd-next").onclick = () => p.goTo(current() + 1);
   canvas.onclick = () => (p.mode === "end" ? p.play() : null);
@@ -404,4 +406,47 @@ async function startBreakdown(item, videoFile) {
     b.onclick = () => p.goTo(order.findIndex((c) => c.index === Number(b.dataset.i)));
   });
   p.play();
+}
+
+async function downloadBreakdown(p, item) {
+  const btn = $("#bd-download");
+  const controls = document.querySelectorAll(".bd-btn, #bd-steps button");
+  btn.disabled = true;
+  controls.forEach((b) => (b.disabled = true));
+  try {
+    const blob = await p.record((f) => {
+      btn.textContent = `Gerando vídeo… ${Math.round(f * 100)}% (mantenha a tela aberta)`;
+    });
+    if (!blob) return;
+    const ext = blob.type.includes("mp4") ? "mp4" : "webm";
+    const name = `raquete-ai-${STROKE_NAMES[item.stroke].toLowerCase()}-${new Date().toISOString().slice(0, 10)}.${ext}`;
+    const file = new File([blob], name, { type: blob.type });
+    // O menu de compartilhar do celular só abre logo após um toque, então pedimos um segundo toque
+    btn.textContent = "✅ Vídeo pronto, toque para salvar";
+    btn.classList.add("primary");
+    btn.onclick = () => saveVideo(file);
+  } catch (err) {
+    alert(err.message);
+    btn.textContent = "⬇ Baixar vídeo";
+  } finally {
+    btn.disabled = false;
+    controls.forEach((b) => (b.disabled = false));
+  }
+}
+
+// No celular abre o menu de compartilhar (Salvar vídeo, Instagram, WhatsApp…); no computador, baixa o arquivo
+async function saveVideo(file) {
+  if (navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: "Meu breakdown no Raquete AI" });
+      return;
+    } catch (err) {
+      if (err.name === "AbortError") return; // a pessoa fechou o menu
+    }
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(file);
+  a.download = file.name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
 }
