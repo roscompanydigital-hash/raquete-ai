@@ -150,16 +150,20 @@ document.querySelectorAll("#strokes .chip").forEach((chip) => {
   };
 });
 
-$("#file").onchange = (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  state.file = file;
-  const video = $("#preview");
-  video.src = URL.createObjectURL(file);
-  video.hidden = false;
-  $("#analyze").disabled = false;
-  $("#upload strong").textContent = "Trocar vídeo";
-};
+// Dois botões: "Gravar agora" (abre a câmera) e "Escolher da galeria"
+document.querySelectorAll(".video-input").forEach((input) => {
+  input.onchange = (e) => {
+    const file = e.target.files[0];
+    e.target.value = ""; // permite escolher o mesmo vídeo de novo
+    if (!file) return;
+    state.file = file;
+    const video = $("#preview");
+    video.src = URL.createObjectURL(file);
+    video.hidden = false;
+    $("#analyze").disabled = false;
+    $("#upload-hint").textContent = `Vídeo selecionado: ${file.name}. Toque em um botão acima para trocar.`;
+  };
+});
 
 // Extrai quadros espaçados igualmente ao longo do vídeo
 async function extractFrames(file, count) { // devolve { frames, thumb }

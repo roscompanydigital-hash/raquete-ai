@@ -92,12 +92,19 @@
       </div>
 
       <h3 class="section-title">3. Vídeo do golpe</h3>
-      <label class="upload" id="upload">
-        <input type="file" id="file" accept="video/*" capture="environment">
-        <span class="upload-icon">🎾</span>
-        <strong>Gravar ou escolher vídeo</strong>
-        <small>Corpo inteiro no quadro, de lado ou de trás, 3 a 10 segundos</small>
-      </label>
+      <div class="upload-options">
+        <label class="upload">
+          <input type="file" class="video-input" accept="video/*" capture="environment">
+          <span class="upload-icon">🎥</span>
+          <strong>Gravar agora</strong>
+        </label>
+        <label class="upload">
+          <input type="file" class="video-input" accept="video/*">
+          <span class="upload-icon">🖼️</span>
+          <strong>Escolher da galeria</strong>
+        </label>
+      </div>
+      <small class="muted" id="upload-hint">Corpo inteiro no quadro, de lado ou de trás, 3 a 10 segundos</small>
       <video id="preview" playsinline muted controls hidden></video>
       <button class="btn primary big" id="analyze" disabled>Analisar golpe</button>
     </section>
