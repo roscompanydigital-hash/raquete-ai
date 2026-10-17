@@ -1,5 +1,7 @@
+import { Breakdown } from "./breakdown.js";
+
 const STROKE_NAMES = { serve: "Saque", forehand: "Forehand", backhand: "Backhand", volley: "Voleio", smash: "Smash" };
-const FRAME_COUNT = 10;
+const FRAME_COUNT = 16;
 const FRAME_WIDTH = 640;
 const THUMB_WIDTH = 160;
 
@@ -28,6 +30,7 @@ async function loadHistory() {
 
 // ---------- Navegação ----------
 function show(view) {
+  if (view !== "result") stopBreakdown();
   state.view = view;
   for (const v of ["auth", "home", "new", "loading", "result"]) $(`#view-${v}`).hidden = v !== view;
   $("#back").hidden = ["auth", "home", "loading"].includes(view);
@@ -188,6 +191,7 @@ async function extractFrames(file, count) { // devolve { frames, thumb }
   const ctx = canvas.getContext("2d");
 
   const frames = [];
+  const times = [];
   let thumb = null;
   for (let i = 0; i < count; i++) {
     const t = (duration * (i + 0.5)) / count;
@@ -198,6 +202,7 @@ async function extractFrames(file, count) { // devolve { frames, thumb }
     });
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     frames.push(canvas.toDataURL("image/jpeg", 0.75));
+    times.push(Math.round(t * 1000) / 1000);
     if (i === Math.floor(count / 2)) {
       const small = document.createElement("canvas");
       small.width = THUMB_WIDTH;
@@ -207,7 +212,7 @@ async function extractFrames(file, count) { // devolve { frames, thumb }
     }
   }
   URL.revokeObjectURL(video.src);
-  return { frames, thumb };
+  return { frames, times, thumb };
 }
 
 $("#analyze").onclick = async () => {
@@ -219,15 +224,15 @@ $("#analyze").onclick = async () => {
   $("#loading-step").textContent = "Extraindo quadros do vídeo";
 
   try {
-    const { frames, thumb } = await extractFrames(state.file, FRAME_COUNT);
+    const { frames, times, thumb } = await extractFrames(state.file, FRAME_COUNT);
     $("#frames").innerHTML = frames.map((f) => `<img alt="" src="${f}">`).join("");
     $("#loading-step").textContent = "O treinador de IA está avaliando cada fase do golpe…";
 
-    const data = await api("/api/analyze", { method: "POST", body: { stroke: state.stroke, level, hand, frames, thumb } });
+    const data = await api("/api/analyze", { method: "POST", body: { stroke: state.stroke, level, hand, frames, times, thumb } });
     // Golpes não reconhecidos voltam sem id e não entram no histórico
     const item = data.id ? data : { stroke: state.stroke, level, hand, thumb, result: data.result };
     if (data.id) state.history.unshift(item);
-    renderResult(item);
+    renderResult(item, state.file);
     show("result");
   } catch (err) {
     if (!state.user) return;
@@ -243,7 +248,8 @@ $("#analyze").onclick = async () => {
 // ---------- Resultado ----------
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
-function renderResult(item) {
+function renderResult(item, videoFile = null) {
+  stopBreakdown();
   state.current = item;
   $("#delete-analysis").hidden = !item.id;
   const r = item.result;
@@ -269,6 +275,19 @@ function renderResult(item) {
         </div>
       </div>
     </div>
+
+    ${r.stroke_detected === false || !(r.phases || []).some((p) => p.title) ? "" : `
+    <div class="breakdown">
+      <canvas id="bd-canvas"></canvas>
+      <div class="bd-controls">
+        <button class="bd-btn" id="bd-prev" aria-label="Momento anterior">‹</button>
+        <button class="bd-btn main" id="bd-replay" aria-label="Ver de novo">↻</button>
+        <button class="bd-btn" id="bd-next" aria-label="Próximo momento">›</button>
+      </div>
+      <div class="bd-steps" id="bd-steps">
+        ${r.phases.map((p, i) => `<button data-i="${i}"><b>${i + 1}</b> ${esc(p.title || p.name)}</button>`).join("")}
+      </div>
+    </div>`}
 
     ${r.stroke_detected === false ? "" : `
     <div class="card">
@@ -305,6 +324,7 @@ function renderResult(item) {
       <h3>Pontos fortes</h3>
       <ul class="strengths">${r.strengths.map((s) => `<li>${esc(s)}</li>`).join("")}</ul>
     </div>` : ""}`}`;
+  if ($("#bd-canvas")) startBreakdown(item, videoFile);
 }
 
 $("#delete-analysis").onclick = async () => {
@@ -324,3 +344,64 @@ $("#delete-analysis").onclick = async () => {
   } catch { /* sem conexão: cai na tela de login */ }
   show(state.user ? "home" : "auth");
 })();
+
+// ---------- Breakdown em câmera lenta ----------
+let player = null;
+let playerVideoUrl = null;
+
+function stopBreakdown() {
+  player?.stop();
+  player = null;
+  if (playerVideoUrl) URL.revokeObjectURL(playerVideoUrl);
+  playerVideoUrl = null;
+}
+
+async function startBreakdown(item, videoFile) {
+  const canvas = $("#bd-canvas");
+  if (!canvas) return;
+  const r = item.result;
+  const checkpoints = r.phases.map((p, i) => ({ ...p, index: i }));
+  const opts = {
+    strokeName: STROKE_NAMES[item.stroke],
+    score: r.score,
+    checkpoints,
+    onChange: (i) => {
+      document.querySelectorAll("#bd-steps button").forEach((b) => {
+        b.classList.toggle("active", Number(b.dataset.i) === checkpoints[i]?.index);
+      });
+    },
+  };
+
+  if (videoFile) {
+    const video = document.createElement("video");
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = "auto";
+    playerVideoUrl = URL.createObjectURL(videoFile);
+    video.src = playerVideoUrl;
+    opts.video = video;
+  } else {
+    // No histórico o vídeo não existe mais: usa os quadros congelados salvos
+    if (!item.id) return;
+    const { keyframes } = await api(`/api/analyses/${item.id}/keyframes`).catch(() => ({}));
+    if (!keyframes || !Object.keys(keyframes).length || state.current !== item) {
+      $(".breakdown")?.remove();
+      return;
+    }
+    opts.images = keyframes;
+    checkpoints.forEach((c) => (c.time = null));
+  }
+
+  const p = new Breakdown(canvas, opts);
+  player = p;
+  const order = [...checkpoints].sort((a, b) => (a.time ?? a.frame) - (b.time ?? b.frame));
+  const current = () => Math.max(0, p.index ?? 0);
+  $("#bd-replay").onclick = () => p.play();
+  $("#bd-prev").onclick = () => p.goTo(current() - 1);
+  $("#bd-next").onclick = () => p.goTo(current() + 1);
+  canvas.onclick = () => (p.mode === "end" ? p.play() : null);
+  document.querySelectorAll("#bd-steps button").forEach((b) => {
+    b.onclick = () => p.goTo(order.findIndex((c) => c.index === Number(b.dataset.i)));
+  });
+  p.play();
+}

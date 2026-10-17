@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS analyses (
   thumb TEXT,
   result JSONB NOT NULL
 );
+ALTER TABLE analyses ADD COLUMN IF NOT EXISTS keyframes JSONB;
 CREATE INDEX IF NOT EXISTS analyses_user_idx ON analyses (user_id, created_at DESC);
 `;
 
@@ -74,14 +75,22 @@ function postgresStore(url) {
     async deleteSession(token) { await q("DELETE FROM sessions WHERE token = $1", [token]); },
     async addAnalysis(userId, a) {
       const { rows } = await q(
-        "INSERT INTO analyses (user_id, stroke, level, hand, thumb, result) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
-        [userId, a.stroke, a.level, a.hand, a.thumb, a.result],
+        `INSERT INTO analyses (user_id, stroke, level, hand, thumb, result, keyframes) VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, created_at, stroke, level, hand, thumb, result`,
+        [userId, a.stroke, a.level, a.hand, a.thumb, a.result, a.keyframes || null],
       );
       return toAnalysis(rows[0]);
     },
     async listAnalyses(userId) {
-      const { rows } = await q("SELECT * FROM analyses WHERE user_id = $1 ORDER BY created_at DESC LIMIT 200", [userId]);
+      const { rows } = await q(
+        "SELECT id, created_at, stroke, level, hand, thumb, result FROM analyses WHERE user_id = $1 ORDER BY created_at DESC LIMIT 200",
+        [userId],
+      );
       return rows.map(toAnalysis);
+    },
+    async getKeyframes(userId, id) {
+      const { rows } = await q("SELECT keyframes FROM analyses WHERE user_id = $1 AND id = $2", [userId, id]);
+      return rows[0]?.keyframes || null;
     },
     async deleteAnalysis(userId, id) {
       const { rowCount } = await q("DELETE FROM analyses WHERE user_id = $1 AND id = $2", [userId, id]);
@@ -132,6 +141,9 @@ function fileStore(file) {
     },
     async listAnalyses(userId) {
       return data.analyses.filter((a) => a.user_id === userId).reverse().slice(0, 200).map(toAnalysis);
+    },
+    async getKeyframes(userId, aid) {
+      return data.analyses.find((a) => a.user_id === userId && a.id === aid)?.keyframes || null;
     },
     async deleteAnalysis(userId, aid) {
       const before = data.analyses.length;

@@ -67,11 +67,32 @@ const ANALYSIS_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["name", "score", "feedback"],
+        required: ["name", "score", "feedback", "frame", "title", "cue", "annotations"],
         properties: {
           name: { type: "string" },
           score: { type: "number" },
           feedback: { type: "string" },
+          frame: { type: "integer", description: "Número do quadro (começando em 1) que melhor mostra este momento" },
+          title: { type: "string", description: "Título curto em MAIÚSCULAS, 1 a 3 palavras, ex.: PREPARAÇÃO" },
+          cue: { type: "string", description: "Dica curta (até 90 caracteres) do que fazer neste momento, direto ao aluno" },
+          annotations: {
+            type: "array",
+            description: "1 a 3 marcações desenhadas por cima do quadro escolhido",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["type", "x", "y", "x2", "y2", "r", "text"],
+              properties: {
+                type: { type: "string", enum: ["circle", "line", "arrow", "label"] },
+                x: { type: "number" },
+                y: { type: "number" },
+                x2: { type: "number" },
+                y2: { type: "number" },
+                r: { type: "number" },
+                text: { type: "string" },
+              },
+            },
+          },
         },
       },
     },
@@ -86,7 +107,19 @@ Como avaliar:
 - As 3 correções devem ser específicas e visíveis nos quadros, não conselhos genéricos. Diga o que está errado, por que isso atrapalha e como corrigir com uma pista simples.
 - Sugira de 2 a 4 exercícios que atacam diretamente essas correções, com séries/repetições.
 - Os quadros são poucos e de baixa resolução: não invente detalhes que não dá para ver. Se algo não estiver visível, diga isso na fase correspondente.
-- Se os quadros não mostrarem uma pessoa executando um golpe de tênis, marque stroke_detected como false, use score 0 e explique no summary como gravar melhor.`;
+- Se os quadros não mostrarem uma pessoa executando um golpe de tênis, marque stroke_detected como false, use score 0 e explique no summary como gravar melhor.
+
+Breakdown em vídeo:
+O app transforma as fases em um vídeo em câmera lenta que congela em cada fase, mostra "número + title", a frase "cue" e desenha as marcações sobre o corpo do aluno. Por isso, para cada fase (4 a 5 fases, em ordem cronológica):
+- frame: o número do quadro que melhor mostra aquele momento. Use quadros diferentes e crescentes.
+- title: 1 a 3 palavras em maiúsculas (ex.: PREPARAÇÃO, CARREGAMENTO, CONTATO, TERMINAÇÃO).
+- cue: uma frase curta e prática, como um treinador falando ("Ombros e raquete giram juntos.").
+- annotations: 1 a 3 marcações sobre o quadro escolhido, apontando exatamente a parte do corpo ou da raquete que importa naquela fase. Coordenadas normalizadas de 0 a 1 em relação ao quadro inteiro (x da esquerda para a direita, y de cima para baixo):
+  - circle: centro (x, y) e raio r (fração da largura, ex.: 0.08). Use para destacar uma articulação, a raquete ou a bola.
+  - line: de (x, y) até (x2, y2). Use para alinhamentos (ex.: altura da bola, braço estendido).
+  - arrow: de (x, y) até (x2, y2). Use para mostrar a direção de um movimento.
+  - label: etiqueta com "text" curto em maiúsculas (até 20 caracteres) posicionada em (x, y).
+  Circle, line e arrow também podem ter "text" curto, mostrado como etiqueta ao lado. Preencha com 0 os campos que o tipo não usa e com "" o text quando não houver. Seja preciso nas posições: olhe onde o corpo realmente está no quadro.`;
 
 const app = express();
 app.set("trust proxy", 1);
@@ -149,6 +182,10 @@ app.get("/api/analyses", requireUser, wrap(async (req, res) => {
   res.json({ analyses: await store.listAnalyses(req.user.id) });
 }));
 
+app.get("/api/analyses/:id/keyframes", requireUser, wrap(async (req, res) => {
+  res.json({ keyframes: (await store.getKeyframes(req.user.id, Number(req.params.id))) || {} });
+}));
+
 app.delete("/api/analyses/:id", requireUser, wrap(async (req, res) => {
   const ok = await store.deleteAnalysis(req.user.id, Number(req.params.id));
   res.status(ok ? 200 : 404).json({ ok });
@@ -157,6 +194,7 @@ app.delete("/api/analyses/:id", requireUser, wrap(async (req, res) => {
 // ---------- Análise ----------
 app.post("/api/analyze", requireUser, wrap(async (req, res) => {
   const { stroke, level, hand, frames, thumb } = req.body ?? {};
+  const times = Array.isArray(req.body?.times) ? req.body.times.map(Number) : [];
   if (!STROKES[stroke] || !Array.isArray(frames) || frames.length === 0 || frames.length > 16) {
     return res.status(400).json({ error: "Envie o tipo de golpe e de 1 a 16 quadros do vídeo." });
   }
@@ -170,15 +208,28 @@ app.post("/api/analyze", requireUser, wrap(async (req, res) => {
   const save = async (result) => {
     if (result.stroke_detected === false) return res.json({ result });
     const safeThumb = typeof thumb === "string" && thumb.startsWith("data:image/") && thumb.length < 60000 ? thumb : null;
-    res.json(await store.addAnalysis(req.user.id, { stroke, level, hand, thumb: safeThumb, result }));
+    // Guarda o quadro congelado de cada fase para rever o breakdown no histórico (o vídeo não é salvo)
+    for (const ph of result.phases || []) {
+      ph.frame = Math.min(frames.length, Math.max(1, Math.round(ph.frame) || 1));
+      ph.time = Number.isFinite(times[ph.frame - 1]) ? times[ph.frame - 1] : null;
+    }
+    const keyframes = {};
+    for (const ph of result.phases || []) {
+      const f = frames[ph.frame - 1];
+      if (typeof f === "string" && f.startsWith("data:image/") && f.length < 200000) keyframes[ph.frame] = f;
+    }
+    res.json(await store.addAnalysis(req.user.id, { stroke, level, hand, thumb: safeThumb, result, keyframes }));
   };
 
-  if (!HAS_KEY) return save({ ...demoAnalysis(stroke), demo: true });
+  if (!HAS_KEY) return save({ ...demoAnalysis(stroke, frames.length), demo: true });
 
-  const content = frames.map((dataUrl) => ({
-    type: "image",
-    source: { type: "base64", media_type: "image/jpeg", data: String(dataUrl).replace(/^data:image\/\w+;base64,/, "") },
-  }));
+  const content = frames.flatMap((dataUrl, i) => [
+    { type: "text", text: `Quadro ${i + 1}${times[i] != null ? ` (${times[i].toFixed(2)}s)` : ""}:` },
+    {
+      type: "image",
+      source: { type: "base64", media_type: "image/jpeg", data: String(dataUrl).replace(/^data:image\/\w+;base64,/, "") },
+    },
+  ]);
   content.push({
     type: "text",
     text: `Golpe: ${STROKES[stroke]}. Nível do aluno: ${level || "não informado"}. Mão dominante: ${hand || "não informada"}.
@@ -212,7 +263,8 @@ Os ${frames.length} quadros acima estão em ordem cronológica. Analise o golpe.
   }
 }));
 
-function demoAnalysis(stroke) {
+function demoAnalysis(stroke, frameCount) {
+  const at = (f) => Math.max(1, Math.round(f * frameCount));
   const score = Math.round((5.5 + Math.random() * 2.5) * 10) / 10;
   return {
     stroke_detected: true,
@@ -229,9 +281,27 @@ function demoAnalysis(stroke) {
       { name: "Alimentação na mão", description: "Um parceiro joga a bola com a mão e você foca no contato à frente.", reps: "3 séries de 15 bolas" },
     ],
     phases: [
-      { name: "Preparação", score: Math.min(10, score + 0.5), feedback: "Boa postura, mas a rotação de ombros começa tarde." },
-      { name: "Contato", score: Math.max(0, score - 0.8), feedback: "O contato acontece um pouco atrás do ideal." },
-      { name: "Terminação", score, feedback: "Terminação curta; complete o movimento." },
+      {
+        name: "Preparação", score: Math.min(10, score + 0.5), feedback: "Boa postura, mas a rotação de ombros começa tarde.",
+        frame: at(0.2), title: "PREPARAÇÃO", cue: "Ombros e raquete giram juntos, cedo.",
+        annotations: [
+          { type: "circle", x: 0.5, y: 0.35, x2: 0, y2: 0, r: 0.14, text: "OMBROS" },
+          { type: "arrow", x: 0.62, y: 0.3, x2: 0.38, y2: 0.3, r: 0, text: "" },
+        ],
+      },
+      {
+        name: "Contato", score: Math.max(0, score - 0.8), feedback: "O contato acontece um pouco atrás do ideal.",
+        frame: at(0.55), title: "CONTATO", cue: "Bata à frente do corpo, braço longo.",
+        annotations: [
+          { type: "circle", x: 0.6, y: 0.45, x2: 0, y2: 0, r: 0.08, text: "À FRENTE" },
+          { type: "line", x: 0.6, y: 0.45, x2: 0.6, y2: 0.9, r: 0, text: "" },
+        ],
+      },
+      {
+        name: "Terminação", score, feedback: "Terminação curta; complete o movimento.",
+        frame: at(0.85), title: "TERMINAÇÃO", cue: "Leve a raquete até o ombro oposto.",
+        annotations: [{ type: "arrow", x: 0.6, y: 0.5, x2: 0.4, y2: 0.25, r: 0, text: "ATÉ O OMBRO" }],
+      },
     ],
   };
 }
