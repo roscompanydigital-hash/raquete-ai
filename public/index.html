@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0d1f17">
+  <title>Raquete AI</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <button class="back" id="back" hidden aria-label="Voltar">←</button>
+    <h1>Raquete <span>AI</span></h1>
+  </header>
+
+  <main>
+    <!-- Início -->
+    <section id="view-home" class="view">
+      <div class="hero">
+        <p class="eyebrow">Seu treinador de tênis com IA</p>
+        <h2>Grave um golpe. Receba nota, correções e exercícios.</h2>
+      </div>
+      <div class="card stats" id="stats"></div>
+      <button class="btn primary big" data-go="new">+ Nova análise</button>
+      <div class="card" id="progress-card" hidden>
+        <h3>Sua evolução</h3>
+        <svg id="chart" viewBox="0 0 320 120" preserveAspectRatio="none"></svg>
+      </div>
+      <h3 class="section-title">Análises recentes</h3>
+      <ul class="history" id="history"></ul>
+      <p class="muted" id="empty">Nenhuma análise ainda. Comece gravando um saque ou forehand!</p>
+    </section>
+
+    <!-- Nova análise -->
+    <section id="view-new" class="view" hidden>
+      <h3 class="section-title">1. Qual golpe?</h3>
+      <div class="chips" id="strokes">
+        <button data-stroke="serve" class="chip active">Saque</button>
+        <button data-stroke="forehand" class="chip">Forehand</button>
+        <button data-stroke="backhand" class="chip">Backhand</button>
+        <button data-stroke="volley" class="chip">Voleio</button>
+        <button data-stroke="smash" class="chip">Smash</button>
+      </div>
+
+      <h3 class="section-title">2. Seu perfil</h3>
+      <div class="row">
+        <label>Nível
+          <select id="level">
+            <option>Iniciante</option>
+            <option selected>Intermediário</option>
+            <option>Avançado</option>
+            <option>Competição</option>
+          </select>
+        </label>
+        <label>Mão
+          <select id="hand">
+            <option>Destro</option>
+            <option>Canhoto</option>
+          </select>
+        </label>
+      </div>
+
+      <h3 class="section-title">3. Vídeo do golpe</h3>
+      <label class="upload" id="upload">
+        <input type="file" id="file" accept="video/*" capture="environment">
+        <span class="upload-icon">🎾</span>
+        <strong>Gravar ou escolher vídeo</strong>
+        <small>Corpo inteiro no quadro, de lado ou de trás, 3 a 10 segundos</small>
+      </label>
+      <video id="preview" playsinline muted controls hidden></video>
+      <button class="btn primary big" id="analyze" disabled>Analisar golpe</button>
+    </section>
+
+    <!-- Analisando -->
+    <section id="view-loading" class="view center" hidden>
+      <div class="ball"></div>
+      <h2 id="loading-title">Analisando seu golpe…</h2>
+      <p class="muted" id="loading-step">Extraindo quadros do vídeo</p>
+      <div class="frames" id="frames"></div>
+    </section>
+
+    <!-- Resultado -->
+    <section id="view-result" class="view" hidden>
+      <div id="result"></div>
+      <button class="btn primary big" data-go="new">Analisar outro golpe</button>
+    </section>
+  </main>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>
