@@ -18,6 +18,7 @@ export class Breakdown {
    * @param {object} opts
    *   video: HTMLVideoElement com o vídeo (modo vídeo) — ou —
    *   images: { [frame]: dataUrl } com os quadros congelados (modo histórico)
+   *   fallbackImages: quadros usados se o vídeo não carregar (ex.: Safari do iPhone)
    *   checkpoints: [{ frame, time, title, cue, annotations }]
    *   strokeName, score, onChange(index)
    */
@@ -33,16 +34,50 @@ export class Breakdown {
     this.raf = null;
     this.stopped = false;
 
-    const loads = Object.entries(opts.images || {}).map(([frame, src]) => new Promise((ok) => {
+    const loadImages = (map) => Promise.all(Object.entries(map || {}).map(([frame, src]) => new Promise((ok) => {
       const img = new Image();
       img.onload = () => { this.images[frame] = img; ok(); };
       img.onerror = ok;
       img.src = src;
-    }));
-    if (this.video && this.video.readyState < 2) {
-      loads.push(new Promise((ok) => this.video.addEventListener("loadeddata", ok, { once: true })));
-    }
-    this.ready = Promise.all(loads).then(() => this.#size());
+    })));
+
+    this.ready = (async () => {
+      if (this.video && !(await this.#prepareVideo())) {
+        // O vídeo não carregou: mostra o breakdown com os quadros congelados
+        this.video = null;
+        this.checkpoints.forEach((c) => (c.time = null));
+        await loadImages(opts.fallbackImages);
+      } else if (!this.video) {
+        await loadImages(opts.images);
+      }
+      if (!this.video && !Object.keys(this.images).length) throw new Error("Não foi possível carregar o vídeo do breakdown.");
+      this.#size();
+    })();
+  }
+
+  // Garante que o vídeo tem um quadro pronto para desenhar. O Safari do iPhone
+  // às vezes só carrega depois de um play(), então tentamos isso também.
+  #prepareVideo(timeoutMs = 8000) {
+    const v = this.video;
+    if (v.readyState >= 2) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (ok) => {
+        if (done) return;
+        done = true;
+        clearTimeout(nudge);
+        clearTimeout(timer);
+        ["loadeddata", "canplay"].forEach((e) => v.removeEventListener(e, onReady));
+        resolve(ok);
+      };
+      const onReady = () => v.readyState >= 2 && finish(true);
+      ["loadeddata", "canplay"].forEach((e) => v.addEventListener(e, onReady));
+      const nudge = setTimeout(() => {
+        v.play().then(() => { v.pause(); onReady(); }).catch(() => {});
+      }, 1200);
+      const timer = setTimeout(() => finish(v.readyState >= 2), timeoutMs);
+      v.load();
+    });
   }
 
   #size() {
@@ -136,7 +171,8 @@ export class Breakdown {
     return new Promise((ok) => {
       const v = this.video;
       if (Math.abs(v.currentTime - t) < 0.01) return ok();
-      const done = () => { v.removeEventListener("seeked", done); ok(); };
+      const done = () => { clearTimeout(timer); v.removeEventListener("seeked", done); ok(); };
+      const timer = setTimeout(done, 2000); // nunca travar se o "seeked" não vier
       v.addEventListener("seeked", done);
       v.currentTime = t;
     });

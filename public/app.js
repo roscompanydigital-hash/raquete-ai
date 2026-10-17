@@ -232,7 +232,7 @@ $("#analyze").onclick = async () => {
     // Golpes não reconhecidos voltam sem id e não entram no histórico
     const item = data.id ? data : { stroke: state.stroke, level, hand, thumb, result: data.result };
     if (data.id) state.history.unshift(item);
-    renderResult(item, state.file);
+    renderResult(item, state.file, frames);
     show("result");
   } catch (err) {
     if (!state.user) return;
@@ -248,7 +248,7 @@ $("#analyze").onclick = async () => {
 // ---------- Resultado ----------
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
-function renderResult(item, videoFile = null) {
+function renderResult(item, videoFile = null, frames = null) {
   stopBreakdown();
   state.current = item;
   $("#delete-analysis").hidden = !item.id;
@@ -325,7 +325,7 @@ function renderResult(item, videoFile = null) {
       <h3>Pontos fortes</h3>
       <ul class="strengths">${r.strengths.map((s) => `<li>${esc(s)}</li>`).join("")}</ul>
     </div>` : ""}`}`;
-  if ($("#bd-canvas")) startBreakdown(item, videoFile);
+  if ($("#bd-canvas")) startBreakdown(item, videoFile, frames);
 }
 
 $("#delete-analysis").onclick = async () => {
@@ -353,11 +353,12 @@ let playerVideoUrl = null;
 function stopBreakdown() {
   player?.stop();
   player = null;
+  document.querySelectorAll(".bd-video").forEach((v) => v.remove());
   if (playerVideoUrl) URL.revokeObjectURL(playerVideoUrl);
   playerVideoUrl = null;
 }
 
-async function startBreakdown(item, videoFile) {
+async function startBreakdown(item, videoFile, frames) {
   const canvas = $("#bd-canvas");
   if (!canvas) return;
   const r = item.result;
@@ -374,13 +375,20 @@ async function startBreakdown(item, videoFile) {
   };
 
   if (videoFile) {
+    // O Safari do iPhone só carrega vídeos que estão na página, com muted/playsinline como atributos
     const video = document.createElement("video");
+    video.className = "bd-video";
     video.muted = true;
-    video.playsInline = true;
+    video.setAttribute("muted", "");
+    video.setAttribute("playsinline", "");
     video.preload = "auto";
     playerVideoUrl = URL.createObjectURL(videoFile);
     video.src = playerVideoUrl;
+    document.body.appendChild(video);
     opts.video = video;
+    if (frames) {
+      opts.fallbackImages = Object.fromEntries(checkpoints.map((c) => [c.frame, frames[c.frame - 1]]).filter(([, f]) => f));
+    }
   } else {
     // No histórico o vídeo não existe mais: usa os quadros congelados salvos
     if (!item.id) return;
@@ -405,7 +413,7 @@ async function startBreakdown(item, videoFile) {
   document.querySelectorAll("#bd-steps button").forEach((b) => {
     b.onclick = () => p.goTo(order.findIndex((c) => c.index === Number(b.dataset.i)));
   });
-  p.play();
+  p.play().catch(() => $(".breakdown")?.remove());
 }
 
 async function downloadBreakdown(p, item) {
